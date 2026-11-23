@@ -1,0 +1,94 @@
+Package: basicBulk
+Title: Basic Bulk Workflows
+Version: 0.99.0
+Authors@R: c(
+    person(given = "Ben",
+           family = "Laufer",
+           role = c("aut", "cre"),
+           email = "blaufer@gmail.com",
+           comment = c(ORCID = "0000-0002-7558-1335")),
+    person(given = "Brad",
+           family = "Friedman",
+           role = c("aut"),
+           email = "friedmab@gene.com",
+           comment = c(ORCID = "0000-0002-5864-5253"))
+           )
+Description: Basic functions that leverage the tidyverse for analyses of
+    (pseudo)bulk omic data. Differential expression and gene set enrichment
+    are run with augere.de and augere.gsea, and basicBulk normalizes a
+    SummarizedExperiment and tidies their results. It provides tables and
+    publication-ready plots for the full workflow: PCA and expression QC,
+    volcano, MA, and heatmap displays of differential expression, overlap
+    (UpSet) and logFC correlation summaries across contrasts, and GSEA
+    (Reactome) pathway analysis.
+License: GPL (>= 3)
+Encoding: UTF-8
+biocViews: Software, DifferentialExpression, GeneExpression,
+    GeneSetEnrichment, Pathways, Reactome, RNASeq, Transcriptomics,
+    Normalization, QualityControl, Visualization
+URL: https://github.com/Genentech/basicBulk
+BugReports: https://github.com/Genentech/basicBulk/issues
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.6.0),
+    SummarizedExperiment
+Imports:
+    AnnotationDbi,
+    augere.de,
+    augere.gsea,
+    circlize,
+    cli,
+    ComplexHeatmap,
+    ComplexUpset,
+    corrr,
+    cowplot,
+    dplyr (>= 1.2.0),
+    DT,
+    edgeR,
+    forcats,
+    gg4way,
+    ggplot2 (>= 3.5.0),
+    ggprism,
+    ggpubr,
+    ggrepel,
+    ggsci,
+    glue,
+    grid,
+    janitor,
+    knitr,
+    limma,
+    magrittr,
+    MetBrewer,
+    msigdbr (>= 26.1.1),
+    PCAtools,
+    purrr (>= 1.0.0),
+    rlang,
+    rstatix,
+    scales,
+    shadowtext,
+    stats,
+    stringr,
+    tibble,
+    tidyr (>= 1.3.0),
+    tidyselect,
+    tidySummarizedExperiment,
+    utils
+Suggests:
+    rmarkdown,
+    BiocStyle,
+    org.Hs.eg.db,
+    org.Mm.eg.db,
+    BiocManager,
+    MatrixGenerics,
+    airway,
+    ggh4x,
+    furrr,
+    future,
+    parallelly,
+    patchwork,
+    png,
+    pals,
+    sva
+VignetteBuilder:
+    knitr
+Config/roxygen2/version: 8.1.1

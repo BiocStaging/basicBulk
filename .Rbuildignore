@@ -1,0 +1,10 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^data-raw$
+^doc$
+^Meta$
+^\.claude$
+^skills$
+^CLAUDE\.md$
+^LICENSE\.md$
+^\.claude-plugin$

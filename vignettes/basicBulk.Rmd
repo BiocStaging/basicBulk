@@ -1,0 +1,456 @@
+---
+title: "basicBulk"
+author:
+  - name: "Ben Laufer"
+output:
+  BiocStyle::html_document:
+    toc_float: TRUE
+bibliography: references.bib
+csl: basicBulk.csl
+date: "`r doc_date()`"
+package: "`r pkg_ver('basicBulk')`"
+vignette: >
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteIndexEntry{basicBulk}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r Setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      crop = NULL)
+```
+
+```{css, echo = FALSE}
+@media screen and (min-width: 992px) {
+  p > img.widefigure {
+    margin-left: -65px;
+    width: calc(100% + 65px);
+    max-width: none;
+  }
+}
+```
+
+# Introduction
+
+basicBulk provides tidyverse functions, tables, and plots for end-to-end analyses of (pseudo)bulk RNA-seq data within the Bioconductor ecosystem, with a focus on comparing contrasts to each other. Starting from a SummarizedExperiment of counts, it covers normalization and quality control, differential expression, and gene set enrichment. Alongside per-contrast volcano, MA, and heatmap plots, it summarizes the overlap of differentially expressed genes across contrasts (UpSet plots), compares pairs of contrasts gene by gene (4-way plots), correlates their logFC profiles, and compares top pathways. basicBulk also includes a Claude Code skill that enables agentic end-to-end analyses.
+
+# Installation
+
+```{r Install, eval = FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager")
+}
+
+BiocManager::install("basicBulk")
+```
+
+To install the development version directly from GitHub:
+
+```{r Install GitHub, eval = FALSE}
+if (!requireNamespace("remotes", quietly = TRUE)) {
+    install.packages("remotes")
+}
+
+remotes::install_github("Genentech/basicBulk")
+```
+
+# Prepare data
+
+We use the example RNA-seq dataset from the airway package [@Himes2014], which contains four airway smooth muscle cell lines with or without dexamethasone (dex) treatment. The functions in this package operate on a SummarizedExperiment [@SummarizedExperiment] with a `counts` assay, so we simply add an `ID` column to the `rowData`.
+
+```{r Prepare se}
+library(basicBulk)
+
+se0 <- augere.de::loadExampleDataset()
+SummarizedExperiment::rowData(se0)$ID <- rownames(se0)
+```
+
+## Normalization
+
+Raw RNA-seq counts are normalized to create additional assays for downstream analyses and visualization outside of differential expression testing and pathway analysis. `basicBulk::tidySE()` filters out lowly expressed genes with `edgeR::filterByExpr()` [@Chen2016], calculates TMM normalization factors with edgeR [@Robinson2010; @Chen2025], and then adds the voom with quality weights [@Law2014; @Liu2015] expression values as a `logCPM` assay, where the filtered genes are `NA` (they are flagged in the `retained` `rowData` column). When a batch effect is present, `adjustBatch = TRUE` adds a `ComBat` assay of voom values from counts adjusted with ComBat-seq [@Zhang2020]. The batch variable must be a `colData` column named `Batch`. Either assay can be selected in the downstream functions with the `assay` argument.
+
+```{r Normalize}
+se <- se0 %>%
+  basicBulk::tidySE(group = "cell",
+                    block = "dex")
+```
+
+## PCA
+
+A wrapper for functions from the PCAtools package [@PCAtools] was utilized for PCA based on the expression of the genes retained by `filterByExpr`, aside from the 10% with the lowest variance. The loadings represent the most positively (red) and negatively (blue) correlated genes with each PC.
+
+```{r PCA, fig.height=6, fig.width=8}
+se %>%
+  basicBulk::PCAgrid(colby = "dex",
+                     shape = "cell",
+                     shapekey = c(16, 17, 15, 18),
+                     selectLab = NA,
+                     alpha = 0.8)
+```
+
+# Gene plots
+
+## Histogram
+
+The histograms show the mean expression within a group for the genes retained by `filterByExpr`. An optional argument, `geneSymbol` will add a red line for the mean expression of a gene of interest within a group.
+
+```{r Histogram, fig.width=6, fig.height=4}
+se %>%
+   basicBulk::geneHistogram(geneSymbol = "FKBP5")
+```
+
+## Genes of interest
+
+The expression values can also be plotted for any genes of interest.
+
+```{r GOI, fig.width=6, fig.height=3}
+se %>%
+   basicBulk::genePlot(genes = c("RARRES1", "TMEM176B", "GBP3"))
+```
+
+## Extract expression
+
+The expression values for any features can also be extracted into a tidy tibble for custom plots or joins with external data.
+
+```{r Extract expression}
+se %>%
+   basicBulk::joinFeatures(c("RARRES1", "TMEM176B", "GBP3"),
+                           symbol = TRUE)
+```
+
+# Differential expression
+
+First, differential gene expression testing is performed using voom-limma [@Law2014; @Ritchie2015] through augere.de [@augerede]. Here we test between three pairs of cell lines, extending the multiple-comparisons example from the augere.de vignette.
+
+```{r voom-limma, fig.show="hide"}
+comparisonList <- list(c("N061011", "N052611"),
+                       c("N080611", "N052611"),
+                       c("N61311", "N052611"))
+
+voomList <- se %>%
+  augere.de::runVoom(groups = "cell",
+                     block = "dex",
+                     comparisons = comparisonList,
+                     assay = "counts",
+                     output.dir = tempfile(),
+                     save.results = FALSE) %>%
+  magrittr::extract2("results")
+```
+
+## DGEdata
+
+Then, for use with downstream functions, the results are tidied into a named list of tibbles known as the `DGEdata`.
+
+```{r DGEdata}
+DGEdata <- se %>%
+  basicBulk::makeDGEdata(voomList)
+```
+
+## sigTibble
+
+This sigTibble is a single tibble with all genes passing the FDR < 0.05 and absolute LogFC > 1 threshold and is also used in some of the downstream functions.
+
+```{r sigTibble}
+sigTibble <- DGEdata %>%
+  basicBulk::makeSigTibble()
+
+sigTibble %>%
+  basicBulk::printSigTibble(BiocStyle = TRUE)
+```
+
+## DEG barplot
+
+This plot provides an overview of the number and direction of DEGs (FDR < 0.05 and |LogFC| > 1) for each contrast.
+
+```{r DEG bar, fig.width=4, fig.height=2}
+sigTibble %>%
+  basicBulk::makeSigCountTibble() %>%
+  basicBulk::DEGbar()
+```
+
+## Volcano plots
+
+```{r Volcano wrap, fig.width=9, fig.height=3.5, fig.wide=TRUE}
+DGEdata %>%
+    basicBulk::basicVolcano(style = "enhanced")
+```
+
+## MA plots
+
+```{r MA wrap, fig.width=9, fig.height=3, fig.wide=TRUE}
+DGEdata %>%
+    basicBulk::basicMA()
+```
+
+## Heatmap
+
+### Basic heatmap
+
+Heatmaps are made using a wrapper for ComplexHeatmap [@Gu2016].
+
+```{r Heatmap, fig.width=6, fig.height=4}
+heatmap <- se %>%
+  basicBulk::basicHeatmap(sigTibble = sigTibble)
+```
+
+### Column annotations
+
+You can also customize the column annotations through the `top_annotation` argument.
+
+```{r Heatmap anno, fig.width=6, fig.height=4}
+col <- list("cell" = ggsci::pal_d3()(n = length(levels(se$Group))) %>%
+             purrr::set_names(se$Group %>% levels()),
+            "dex" = c("#8624F5", "#1FC3AA") %>%
+             purrr::set_names(unique(se$dex)))
+
+top_annotation <- ComplexHeatmap::HeatmapAnnotation("cell" = se$Group,
+                                                    "dex" = se$dex,
+                                                    col = col,
+                                                    annotation_legend_param = list(
+                                                      labels_gp = grid::gpar(fontsize = 9)),
+                                                    border = TRUE)
+
+se %>%
+  basicBulk::basicHeatmap(sigTibble = sigTibble,
+                          top_annotation = top_annotation)
+```
+
+### Gene sets
+
+Heatmaps of genes of interest can be plotted with the `geneSet` argument, which is exemplified here for the top highly variable genes (HVGs) that can be used for further QC.
+
+```{r Heatmap geneSet, fig.width=6, fig.height=5}
+HVGs <- se %>%
+  basicBulk::getHVGs(n = 20)
+
+se %>%
+  basicBulk::basicHeatmap(geneSet = HVGs,
+                          show_row_names = TRUE)
+```
+
+### Extract
+
+It is also possible to extract a tidy version of the matrix with annotations from the rowData and colData.
+
+```{r Extract heatmap}
+se %>%
+  basicBulk::extractHeatmap(heatmap)
+```
+
+## UpSet
+
+### Plot
+
+The overlaps between significant genes are visualized below in an UpSet plot, an alternative to a Venn diagram [@Lex2014], using a wrapper for ComplexUpset [@Krassowski2020]. The bar plot on the left shows the set size (total number of DEGs) for a given contrast. The bar plot on the top shows the intersection size (number of DEGs) for different combinations of contrasts, which are indicated by the dots below.
+
+```{r Plot UpSet, fig.width=7, fig.height=4.5}
+DGEdata %>%
+    purrr::set_names(names(.) %>% stringr::str_remove(" vs .*")) %>%
+    basicBulk::basicUpset(width_ratio = 0.2, height_ratio = 0.5)
+```
+
+### Extract
+
+It is also possible to extract any overlaps of interest shown in the UpSet plot.
+
+```{r Extract UpSet}
+DGEdata %>%
+  names() %>%
+  paste("Up") %>%
+  basicBulk::extractUpSet(DGEdata)
+```
+
+## LogFC correlations
+
+The per-gene logFC profiles can be correlated across all contrasts to summarize their agreement. `basicBulk::prepareCor()` runs `gg4way::getCor()` over every pair of contrasts and `basicBulk::corTriplot()` renders the pairwise correlations as a triangle.
+
+First, we prepare a `corTibble` that specifies the pairs of contrasts to compare.
+
+```{r corTibble}
+corTibble <- tidyr::crossing(x = names(DGEdata),
+                             y = names(DGEdata)) %>%
+  dplyr::filter(x != y) %>%
+  dplyr::mutate(name = glue::glue("{stringr::str_remove(x, ' vs .*')} vs \\
+                                   {stringr::str_remove(y, ' vs .*')}"))
+```
+
+Then we generate the logFC correlation triangle plot.
+
+```{r LogFC Correlations, fig.width=3, fig.height=2.7, out.width="50%"}
+corTibble %>%
+  basicBulk::prepareCor(DGEdata, cd = SummarizedExperiment::colData(se)) %>%
+  basicBulk::corTriplot() +
+  # Manual scaling is for the purpose of this vignette
+  ggplot2::scale_alpha(range = c(1, 1), guide = "none") +
+  ggplot2::scale_size(range = c(7, 7), guide = "none")
+```
+
+The correlations can also be shown as a table, with one row per pair of contrasts.
+
+```{r Correlation table}
+corTibble %>%
+  dplyr::filter(x < y) %>%
+  basicBulk::prepareCor(DGEdata,
+                        cd = SummarizedExperiment::colData(se),
+                        format = "long") %>%
+  basicBulk::printCorTibble(BiocStyle = TRUE)
+```
+
+## 4-way plots
+
+The `corTibble` can also be used to make 4-way plots [@gg4way] for all pairs of contrasts in a functional way.
+
+```{r 4 way plots, fig.width=10, fig.height=10, fig.wide=TRUE}
+corTibble %>%
+  dplyr::filter(x < y) %>%
+  purrr::pmap(~ with(list(...),
+                     gg4way::gg4way(DGEdata,
+                                    x = x,
+                                    y = y,
+                                    logFC = "LogFC",
+                                    FDR = "FDR"))) %>%
+  cowplot::plot_grid(plotlist = ., ncol = 2)
+```
+
+## DEG plots
+
+You can also plot DEGs of interest with a bracket and asterisk for each contrast where they passed the threshold (default is FDR < 0.05 and |LogFC| > 1). Setting a `ref.group` instead marks only the comparisons with that group, with an asterisk above each of the other groups.
+
+```{r DEG wrap, fig.width=6, fig.height=3}
+genes <- DGEdata %>%
+  magrittr::extract2(1) %>%
+  dplyr::arrange(FDR) %>%
+  dplyr::slice(1:5) %>%
+  dplyr::pull(symbol)
+
+se %>%
+  basicBulk::genePlot(genes = genes,
+                      DGEdata = DGEdata,
+                      ncol = 5)
+```
+
+# Pathway analysis
+
+A competitive gene set test can be performed using CAMERA [@Wu2012] through augere.gsea [@augeregsea]. The REACTOME pathways gene set [@Ragueneau2025] can be obtained from MSigDB [@Subramanian2005; @Liberzon2015] with `basicBulk::getReactome()`.
+
+```{r GSEA, fig.show="hide"}
+gene.sets <- basicBulk::getReactome("Homo sapiens")
+
+set.seed(100)
+GSEAlist <- comparisonList %>%
+  purrr::set_names(sapply(., `[`, 1)) %>%
+  purrr::map(~ se %>%
+               augere.gsea::runContrast(sets = gene.sets,
+                                        groups = "cell",
+                                        block = "dex",
+                                        comparison = .x,
+                                        methods = "camera",
+                                        assay = "counts",
+                                        output.dir = tempfile(),
+                                        save.results = FALSE)) %>%
+  basicBulk::tidyGSEAlist()
+```
+
+## Top pathways
+
+Here we plot the top terms from each contrast to see how they compare.
+
+```{r Top GSEA, fig.width=6, fig.height=5}
+GSEAlist %>%
+  purrr::map(~ dplyr::mutate(.x, Term = stringr::str_trunc(Term, 44))) %>%
+  basicBulk::topGSEAplot(n_terms = 5)
+```
+
+## Pathway barplots
+
+Here we plot the top terms for each contrast to focus on them in isolation.
+
+```{r GSEA grid, fig.width=5, fig.height=7}
+GSEAlist %>%
+  basicBulk::GSEAplotList() %>%
+  purrr::imap(~ .x + ggplot2::labs(title = .y)) %>%
+  cowplot::plot_grid(plotlist = ., ncol = 1)
+```
+
+## Pathway table
+
+```{r sigGSEA tibble}
+GSEAlist %>%
+  basicBulk::printGSEAtibble(BiocStyle = TRUE)
+```
+
+## Pathway expression
+
+The genes within pathways of interest can be visualized as an expression heatmap. Here we take two significant pathways from the N61311 vs N052611 contrast. Genes shared between pathways are shown once and assigned to the first matching pathway.
+
+```{r GSEA heatmaps, fig.width=6, fig.height=5}
+pathways <- c("CELL SURFACE INTERACTIONS AT THE VASCULAR WALL",
+              "DEVELOPMENTAL LINEAGE OF MAMMARY GLAND MYOEPITHELIAL CELLS") %>%
+  stringr::str_replace_all(" ", "_") %>%
+  paste0("REACTOME_", .)
+
+pathways %>%
+  basicBulk::makePathwayTibble(gene.sets) %>%
+  dplyr::distinct(ID, .keep_all = TRUE) %>%
+  dplyr::mutate(Pathway = forcats::fct_drop(Pathway)) %>%
+  basicBulk::basicHeatmap(se = se,
+                          sigTibble = .,
+                          pathways = TRUE,
+                          show_row_names = FALSE)
+```
+
+## Pathway scores
+
+Pathways can also be summarized as gene set scores, where `basicBulk::joinFeatures(score = TRUE)` averages the expression of each pathway's genes for every sample and `basicBulk::genePlot()` plots the scores. Only the genes retained by `filterByExpr` contribute, since the others are `NA` in the `logCPM` assay. These scores summarize expression and are not an enrichment test. Here we plot the same two pathways.
+
+```{r Pathway scores, fig.width=6, fig.height=4}
+pathways %>%
+  magrittr::extract(gene.sets, .) %>%
+  purrr::set_names(~ .x %>%
+                     stringr::str_remove("^REACTOME_") %>%
+                     stringr::str_replace_all("_", " ") %>%
+                     stringr::str_wrap(20)) %>%
+  purrr::map(~ basicBulk::joinFeatures(se, features = .x, score = TRUE)) %>%
+  purrr::list_rbind(names_to = "symbol") %>%
+  basicBulk::genePlot(genes = unique(.$symbol),
+                      size = 3) +
+  ggplot2::labs(y = "Gene set score")
+```
+
+# Claude Code plugin
+
+basicBulk also provides a Claude Code plugin with a skill for bulk RNA-seq analyses that uses the functions shown in this vignette and can generate a complete R Markdown report for a dataset. The skill runs R, so basicBulk, augere.de, and augere.gsea need to be installed.
+
+To install the plugin, add basicBulk's Bioconductor GitHub mirror as a plugin marketplace and then install the plugin from within a Claude Code session:
+
+```
+/plugin marketplace add bioc/basicbulk
+/plugin install basicbulk@basicbulk
+```
+
+The same plugin is also available from the development repository (`/plugin marketplace add genentech/basicbulk`). Add only one of the two marketplaces, since both are named `basicbulk`. It's recommended to enable auto-update for the `basicbulk` marketplace (`/plugin`, under Marketplaces) so new versions of the plugin install automatically.
+
+The skill can then be used with a short prompt. For example, this prompt asks it to recreate the analysis in this vignette:
+
+```
+/basicbulk:basicbulk Analyze augere.de::loadExampleDataset() by comparing
+the N061011, N080611, and N61311 cell lines to N052611, blocking on dex.
+```
+
+# Similar packages
+
+tidybulk [@Mangiola2021] also brings bulk RNA-seq analysis to the tidyverse through modular, pipe-friendly functions. basicBulk differs in that it offers an end-to-end workflow focused on comparing multiple contrasts to each other.
+
+# Package support
+
+The [Bioconductor support site](https://support.bioconductor.org/) is the preferred method to ask for help. Before posting, it's recommended to check [previous posts](https://support.bioconductor.org/tag/basicBulk/) for the answer and look over the [posting guide](http://www.bioconductor.org/help/support/posting-guide/). For the post, it's important to use the `basicBulk` tag and provide both a minimal reproducible example and session information.
+
+# Session info
+
+```{r Session info, echo=FALSE}
+sessionInfo()
+```
+
+# References
